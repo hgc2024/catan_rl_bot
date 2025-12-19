@@ -61,7 +61,13 @@ class CatanEnv(gym.Env):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        self.game = Game()
+        players = [
+            Player(Color.RED),
+            Player(Color.BLUE),
+            Player(Color.WHITE),
+            Player(Color.ORANGE),
+        ]
+        self.game = Game(players)
         self.resource_tracker.reset()
         
         # Fast forward if we need to (or valid start)
@@ -101,7 +107,7 @@ class CatanEnv(gym.Env):
             # Possibly terminate if too many invalid?
             
         # Check termination
-        terminated = self.game.state.is_game_over
+        terminated = self.game.winning_color is not None
         truncated = False
         
         self.resource_tracker.update_from_game_state(self.game.state)

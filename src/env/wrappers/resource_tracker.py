@@ -9,6 +9,12 @@ class ResourceTracker:
             "WOOD": 0, "BRICK": 1, "SHEEP": 2, "WHEAT": 3, "ORE": 4
         }
         
+    def reset(self):
+        pass
+
+    def update_from_game_state(self, game_state):
+        pass
+        
     def get_opponent_resources(self, game_state, current_player_id):
         """
         Returns a flat list of opponent resource counts using perfect information 
@@ -21,26 +27,21 @@ class ResourceTracker:
         Returns:
             np.array or list of shape (15,) -> 3 opponents * 5 resources
         """
-        # Identify opponents (P1, P2, P3 relative to current_player_id?)
-        # Or just fixed order 0, 1, 2, 3 excluding self.
-        # Usually for RL, we want relative order (Next, Opposite, Previous).
-        
         opponents_vectors = []
         
         # Relative indices: (id+1)%4, (id+2)%4, (id+3)%4
         opponent_ids = [(current_player_id + i) % self.num_players for i in range(1, 4)]
         
+        # Access player_state dict from game_state
+        # Catanatron stores resources as P{id}_{RES}_IN_HAND
+        player_state = getattr(game_state, "player_state", {})
+        
         for pid in opponent_ids:
-            # player = game_state.players[pid] # Assuming list access
-            # resources = player.resources # Assuming dict or counter
-            
-            # We need to access this dynamically. 
-            # Placeholder until we confirm exact attribute names
-            p_res_vec = [0] * 5
-            
-            # TODO: Uncomment real access
-            # for res_name, idx in self.resource_map.items():
-            #     p_res_vec[idx] = resources.get(res_name, 0)
+            p_res_vec = []
+            for res_name in ["WOOD", "BRICK", "SHEEP", "WHEAT", "ORE"]:
+                key = f"P{pid}_{res_name}_IN_HAND"
+                count = player_state.get(key, 0)
+                p_res_vec.append(count)
             
             opponents_vectors.extend(p_res_vec)
             

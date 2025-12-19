@@ -1,10 +1,16 @@
 try:
     from catanatron import Game, Color
-    from catanatron.models.map import CatanMap
     from catanatron.models.player import Player
     
     print("--- Catanatron Imported Successfully ---")
-    game = Game()
+    
+    players = [
+        Player(Color.RED),
+        Player(Color.BLUE),
+        Player(Color.WHITE),
+        Player(Color.ORANGE),
+    ]
+    game = Game(players)
     state = game.state
     
     print(f"State Attributes: {dir(state)}")
@@ -19,7 +25,7 @@ try:
     # Check player attributes
     p0 = state.players[0]
     print(f"Player Attributes: {dir(p0)}")
-    print(f"Resources: {p0.resources}")
+    # print(f"Resources: {p0.resources}")
     
 except ImportError:
     print("Catanatron not installed yet.")
