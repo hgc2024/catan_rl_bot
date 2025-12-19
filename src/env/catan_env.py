@@ -48,7 +48,8 @@ class CatanEnv(gym.Env):
         # Flattened Discrete Action Space
         # 0-53: Build Settlement/City (Vertex)
         # 54-125: Build Road (Edge)
-        # 126-130: Buy Dev Card
+        # 126-130: Buy Dev Card / Roll
+        # 126: Buy, 127: Roll
         # 131-135: Play Dev Card
         # 136-154: Move Robber
         # 155-160: Maritime Trade
@@ -59,6 +60,39 @@ class CatanEnv(gym.Env):
         self.game = None
         self.player_id = 0 # Agent controls player 0
         self.resource_tracker = ResourceTracker()
+        
+        # Build static mappings for consistent indexing
+        self.node_list = list(range(54))
+        self.edge_list = self._build_edge_list()
+        self.edge_to_idx = {edge: i for i, edge in enumerate(self.edge_list)}
+
+    def _build_edge_list(self):
+        # Brute-force discovery of all edges by placing settlements everywhere
+        edges = set()
+        for node_id in range(54):
+            players = [Player(Color.RED), Player(Color.BLUE), Player(Color.WHITE), Player(Color.ORANGE)]
+            temp_game = Game(players)
+            # Try to place settlement at node_id
+            # Note: In setup, we can place settlement anywhere that is valid
+            try:
+                # Construct action manually
+                color = temp_game.state.current_color
+                if callable(color): color = color()
+                act = Action(color, ActionType.BUILD_SETTLEMENT, node_id)
+                temp_game.execute(act)
+                
+                # Check resulting playable actions for roads
+                for potential_road in temp_game.state.playable_actions:
+                    if potential_road[1] == ActionType.BUILD_ROAD:
+                        edges.add(tuple(sorted(potential_road[2])))
+            except:
+                # Some nodes might be blocked or invalid in this layout?
+                # But in a new game, most should be fine.
+                continue
+        
+        edge_list = sorted(list(edges))
+        # print(f"DEBUG: Discovered {len(edge_list)} edges")
+        return edge_list
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -99,17 +133,17 @@ class CatanEnv(gym.Env):
         
         # Since catanatron might raise error on invalid, we wrap.
         try:
-            self.game.play(catan_action)
+            self.game.execute(catan_action)
             reward = 0 # Calculate based on events (Need Hooks or State Diff)
             # TODO: Implement Reward Shaping based on state diff
         except Exception as e:
             # Invalid move
             reward = -10
-            # print(f"DEBUG: Invalid move {action_idx} -> {catan_action}: {e}")
-            # terminated = True # Should we terminate on illegal move? SB3 often prefers it.
+            # terminated = True 
             
         # Check termination
-        terminated = self.game.winning_color is not None
+        win_color = self.game.winning_color() if callable(self.game.winning_color) else self.game.winning_color
+        terminated = win_color is not None
         truncated = False
         
         self.resource_tracker.update_from_game_state(self.game.state)
@@ -128,33 +162,27 @@ class CatanEnv(gym.Env):
         playable = self.game.state.playable_actions
         
         for action in playable:
-            # Action is likely (Color, ActionType, Value)
-            # We use index access for safety if field names differ
-            # ActionType is an Enum usually.
-            
-            # Try appropriate access
-            try:
-                # Assuming namedtuple structure or tuple
-                # Index 1 is ActionType
-                act_type = action[1]
-                val = action[2]
-            except:
-                continue
-
+            act_type = action[1]
+            val = action[2]
             name = getattr(act_type, 'name', str(act_type))
             
             if name == "BUILD_SETTLEMENT" or name == "BUILD_CITY":
-                if val is not None and 0 <= val <= 53:
+                if isinstance(val, int) and 0 <= val <= 53:
                     mask[val] = 1
                     
             elif name == "BUILD_ROAD":
-                if val is not None and 0 <= val <= 71: # 72 edges max?
-                    mask[54 + val] = 1
+                # val is expected to be a tuple (node1, node2)
+                if isinstance(val, tuple):
+                    val = tuple(sorted(val))
+                    if val in self.edge_to_idx:
+                        mask[54 + self.edge_to_idx[val]] = 1
                     
             elif name == "BUY_DEVELOPMENT_CARD":
                 mask[126] = 1
+            elif name == "ROLL":
+                mask[127] = 1
                 
-            elif name == "PLAY_KNIGHT":
+            elif name == "PLAY_KNIGHT_CARD":
                 mask[131] = 1
             elif name == "PLAY_YEAR_OF_PLENTY":
                 mask[132] = 1
@@ -164,7 +192,7 @@ class CatanEnv(gym.Env):
                 mask[134] = 1
                 
             elif name == "MOVE_ROBBER":
-                 if val is not None and 0 <= val <= 18:
+                 if isinstance(val, int) and 0 <= val <= 18:
                      mask[136 + val] = 1
             
             elif name == "END_TURN":
@@ -184,21 +212,30 @@ class CatanEnv(gym.Env):
             
         # 54-125: Build Road (Edge)
         elif 54 <= action_idx <= 125:
-            edge_id = action_idx - 54
-            return Action(color, ActionType.BUILD_ROAD, edge_id)
+            edge_idx = action_idx - 54
+            if edge_idx < len(self.edge_list):
+                return Action(color, ActionType.BUILD_ROAD, self.edge_list[edge_idx])
             
         # 126: Buy Dev Card
         elif action_idx == 126:
             return Action(color, ActionType.BUY_DEVELOPMENT_CARD, None)
             
+        # 127: Roll
+        elif action_idx == 127:
+            return Action(color, ActionType.ROLL, None)
+            
         # 131-135: Play Dev Card
         elif 131 <= action_idx <= 135:
-            card_map = {131: ActionType.PLAY_KNIGHT, 
+            card_map = {131: ActionType.PLAY_KNIGHT_CARD, 
                         132: ActionType.PLAY_YEAR_OF_PLENTY, 
                         133: ActionType.PLAY_ROAD_BUILDING, 
                         134: ActionType.PLAY_MONOPOLY}
             act_type = card_map.get(action_idx)
             if act_type:
+                 # Note: Development card actions in catanatron might need the card as value?
+                 # But usually None works for simple play. 
+                 # Let's check state_functions.py: play_dev_card(state, color, dev_card)
+                 # If it fails, we may need to specify card type.
                  return Action(color, act_type, None)
                  
         # 136-154: Move Robber
