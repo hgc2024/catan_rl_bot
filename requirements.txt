@@ -1,0 +1,10 @@
+catanatron
+gymnasium
+shimmy
+stable-baselines3
+fastapi
+uvicorn
+websockets
+numpy
+torch
+tensorboard
