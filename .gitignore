@@ -1,0 +1,32 @@
+# Environment
+venv/
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+
+# Logs and Checkpoints
+logs/
+tensorboard_logs/
+*.zip
+*.pth
+
+# Temporary & Debug Scripts
+inspect_*.py
+debug_*.py
+explore_*.py
+check_policy.py
+verify_masking.py
+test_train.py
+
+# Output Files
+*.txt
+!requirements.txt
+!tasks.md
+!implementation_plan.md
+
+# OS
+.DS_Store
+Thumbs.db
