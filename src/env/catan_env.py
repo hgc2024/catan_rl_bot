@@ -2,6 +2,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 from catanatron import Game, Color, Action
+from catanatron.models.enums import ActionType
 from catanatron.models.player import Player
 from .wrappers.resource_tracker import ResourceTracker
 
@@ -104,7 +105,8 @@ class CatanEnv(gym.Env):
         except Exception as e:
             # Invalid move
             reward = -10
-            # Possibly terminate if too many invalid?
+            # print(f"DEBUG: Invalid move {action_idx} -> {catan_action}: {e}")
+            # terminated = True # Should we terminate on illegal move? SB3 often prefers it.
             
         # Check termination
         terminated = self.game.winning_color is not None
@@ -171,42 +173,45 @@ class CatanEnv(gym.Env):
         return mask
 
     def _map_action(self, action_idx):
+        color = self.game.state.current_color
+        if callable(color):
+            color = color()
+
         # 0-53: Build Settlement/City (Vertex)
         if 0 <= action_idx <= 53:
             node_id = action_idx
-            # Check if settlement exists to decide City vs Settlement
-            # This requires reading state. Simpler: Try one, fallback? 
-            # Or use explicit check.
-            # Assuming Settlement for now.
-            return Action(self.game.state.current_color, "BUILD_SETTLEMENT", node_id)
+            return Action(color, ActionType.BUILD_SETTLEMENT, node_id)
             
         # 54-125: Build Road (Edge)
         elif 54 <= action_idx <= 125:
             edge_id = action_idx - 54
-            return Action(self.game.state.current_color, "BUILD_ROAD", edge_id)
+            return Action(color, ActionType.BUILD_ROAD, edge_id)
             
         # 126: Buy Dev Card
         elif action_idx == 126:
-            return Action(self.game.state.current_color, "BUY_DEVELOPMENT_CARD", None)
+            return Action(color, ActionType.BUY_DEVELOPMENT_CARD, None)
             
         # 131-135: Play Dev Card
         elif 131 <= action_idx <= 135:
-            card_map = {131: "KNIGHT", 132: "YEAR_OF_PLENTY", 133: "ROAD_BUILDING", 134: "MONOPOLY"}
-            card_type = card_map.get(action_idx)
-            if card_type:
-                 return Action(self.game.state.current_color, "PLAY_" + card_type, None)
+            card_map = {131: ActionType.PLAY_KNIGHT, 
+                        132: ActionType.PLAY_YEAR_OF_PLENTY, 
+                        133: ActionType.PLAY_ROAD_BUILDING, 
+                        134: ActionType.PLAY_MONOPOLY}
+            act_type = card_map.get(action_idx)
+            if act_type:
+                 return Action(color, act_type, None)
                  
         # 136-154: Move Robber
         elif 136 <= action_idx <= 154:
             hex_id = action_idx - 136
-            return Action(self.game.state.current_color, "MOVE_ROBBER", hex_id)
+            return Action(color, ActionType.MOVE_ROBBER, hex_id)
             
         # 201: End Turn
         elif action_idx == 201:
-            return Action(self.game.state.current_color, "END_TURN", None)
+            return Action(color, ActionType.END_TURN, None)
             
-        # Fallback or Todo: Trade
-        return Action(self.game.state.current_color, "END_TURN", None)
+        # Fallback
+        return Action(color, ActionType.END_TURN, None)
 
     def _get_obs(self):
         state = self.game.state

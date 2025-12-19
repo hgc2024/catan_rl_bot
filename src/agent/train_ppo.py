@@ -63,7 +63,14 @@ if __name__ == "__main__":
     # Callbacks
     checkpoint_callback = CheckpointCallback(save_freq=50000, save_path='./logs/', name_prefix='ppo_catan')
     
-    model.learn(total_timesteps=total_timesteps, callback=checkpoint_callback)
-    
-    model.save("ppo_catan_final")
-    print("Training complete. Model saved.")
+    try:
+        model.learn(total_timesteps=total_timesteps, callback=checkpoint_callback)
+        model.save("ppo_catan_final")
+        print("Training complete. Model saved.")
+    except KeyboardInterrupt:
+        print("\nTraining interrupted by user. Saving model...")
+        model.save("ppo_catan_interrupted")
+        print("Model saved to 'ppo_catan_interrupted.zip'.")
+    finally:
+        vec_env.close()
+        print("Environment closed.")
