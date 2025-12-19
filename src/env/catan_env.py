@@ -120,23 +120,34 @@ class CatanEnv(gym.Env):
     def get_valid_actions_mask(self):
         mask = np.zeros(self.action_space.n, dtype=np.int8)
         
-        # In case game is over or not started
-        if self.game is None or self.game.winning_color is not None:
+        if self.game is None:
             return mask
             
         playable = self.game.state.playable_actions
         
         for action in playable:
-            name = action.name
-            value = action.value # ID of node/edge/hex or None
+            # Action is likely (Color, ActionType, Value)
+            # We use index access for safety if field names differ
+            # ActionType is an Enum usually.
+            
+            # Try appropriate access
+            try:
+                # Assuming namedtuple structure or tuple
+                # Index 1 is ActionType
+                act_type = action[1]
+                val = action[2]
+            except:
+                continue
+
+            name = getattr(act_type, 'name', str(act_type))
             
             if name == "BUILD_SETTLEMENT" or name == "BUILD_CITY":
-                if value is not None and 0 <= value <= 53:
-                    mask[value] = 1
+                if val is not None and 0 <= val <= 53:
+                    mask[val] = 1
                     
             elif name == "BUILD_ROAD":
-                if value is not None and 0 <= value <= 71: # 72 edges max?
-                    mask[54 + value] = 1
+                if val is not None and 0 <= val <= 71: # 72 edges max?
+                    mask[54 + val] = 1
                     
             elif name == "BUY_DEVELOPMENT_CARD":
                 mask[126] = 1
@@ -151,8 +162,8 @@ class CatanEnv(gym.Env):
                 mask[134] = 1
                 
             elif name == "MOVE_ROBBER":
-                 if value is not None and 0 <= value <= 18:
-                     mask[136 + value] = 1
+                 if val is not None and 0 <= val <= 18:
+                     mask[136 + val] = 1
             
             elif name == "END_TURN":
                 mask[201] = 1
