@@ -65,6 +65,14 @@ class CatanEnv(gym.Env):
         self.node_list = list(range(54))
         self.edge_list = self._build_edge_list()
         self.edge_to_idx = {edge: i for i, edge in enumerate(self.edge_list)}
+        
+        # Build hex mapping (19 land hexes)
+        players = [Player(Color.RED), Player(Color.BLUE), Player(Color.WHITE), Player(Color.ORANGE)]
+        temp_game = Game(players)
+        self.hex_list = sorted(temp_game.state.board.map.land_tiles.keys())
+        self.hex_to_idx = {coord: i for i, coord in enumerate(self.hex_list)}
+
+        self._last_vp = 0
 
     def _build_edge_list(self):
         # Brute-force discovery of all edges by placing settlements everywhere
@@ -104,11 +112,7 @@ class CatanEnv(gym.Env):
         ]
         self.game = Game(players)
         self.resource_tracker.reset()
-        
-        # Fast forward if we need to (or valid start)
-        # Catanatron starts at setup phase. 
-        # For RL, we might want to play setup automatically or let agent do it.
-        # Assuming agent does setup too (since actions include building).
+        self._last_vp = 0
         
         obs = self._get_obs()
         info = self._get_info()
@@ -117,29 +121,21 @@ class CatanEnv(gym.Env):
     def step(self, action_idx):
         catan_action = self._map_action(action_idx)
         
-        # Apply action
-        # Catanatron's game.play() applies action and advances turn logic
-        # current_color = self.game.state.current_color
-        # But we need to ensure it's our turn or handle multi-agent.
-        # For Phase 1, we control Player 0. If it's not our turn, we must either:
-        # a) Simulate opponents (Random/Heuristic) until it is our turn again.
-        # b) Assume self-play environment where we control all? 
-        # The prompt says: "Inferred (Opponents)..." implying opponents exist.
-        # "Implementation Plan: Phase 2... Masking & Random Agent".
-        # We likely need the step() to run until the agent works again.
-        
-        # NOTE: For now, we apply single action. If returns invalid, we punish.
-        # If valid, we verify if turn defines.
-        
-        # Since catanatron might raise error on invalid, we wrap.
         try:
             self.game.execute(catan_action)
-            reward = 0 # Calculate based on events (Need Hooks or State Diff)
-            # TODO: Implement Reward Shaping based on state diff
+            # Reward based on Victory Points change
+            curr_vp = self.game.state.player_state[f"P{self.player_id}_VICTORY_POINTS"]
+            reward = float(curr_vp - self._last_vp)
+            self._last_vp = curr_vp
+            
+            # Bonus for winning
+            win_color = self.game.winning_color() if callable(self.game.winning_color) else self.game.winning_color
+            if win_color == Color.RED: # Player 0 is RED
+                reward += 10.0
+                
         except Exception as e:
-            # Invalid move
-            reward = -10
-            # terminated = True 
+            # Invalid move mapping fallback
+            reward = -1.0 # Small penalty for picking a move that failed execution
             
         # Check termination
         win_color = self.game.winning_color() if callable(self.game.winning_color) else self.game.winning_color
@@ -171,11 +167,10 @@ class CatanEnv(gym.Env):
                     mask[val] = 1
                     
             elif name == "BUILD_ROAD":
-                # val is expected to be a tuple (node1, node2)
                 if isinstance(val, tuple):
-                    val = tuple(sorted(val))
-                    if val in self.edge_to_idx:
-                        mask[54 + self.edge_to_idx[val]] = 1
+                    val_sorted = tuple(sorted(val))
+                    if val_sorted in self.edge_to_idx:
+                        mask[54 + self.edge_to_idx[val_sorted]] = 1
                     
             elif name == "BUY_DEVELOPMENT_CARD":
                 mask[126] = 1
@@ -192,8 +187,13 @@ class CatanEnv(gym.Env):
                 mask[134] = 1
                 
             elif name == "MOVE_ROBBER":
-                 if isinstance(val, int) and 0 <= val <= 18:
-                     mask[136 + val] = 1
+                 # val is (coord, victim, None)
+                 coord = val[0] if isinstance(val, tuple) else val
+                 if coord in self.hex_to_idx:
+                     mask[136 + self.hex_to_idx[coord]] = 1
+            
+            elif name == "DISCARD":
+                mask[201] = 1 # Map DISCARD to a single action for now
             
             elif name == "END_TURN":
                 mask[201] = 1
@@ -240,15 +240,24 @@ class CatanEnv(gym.Env):
                  
         # 136-154: Move Robber
         elif 136 <= action_idx <= 154:
-            hex_id = action_idx - 136
-            return Action(color, ActionType.MOVE_ROBBER, hex_id)
+            map_idx = action_idx - 136
+            if map_idx < len(self.hex_list):
+                target_coord = self.hex_list[map_idx]
+                # Find valid MOVE_ROBBER action for this coord
+                for a in self.game.state.playable_actions:
+                    if a[1] == ActionType.MOVE_ROBBER:
+                        coord = a[2][0] if isinstance(a[2], tuple) else a[2]
+                        if coord == target_coord:
+                            return Action(color, ActionType.MOVE_ROBBER, a[2])
             
-        # 201: End Turn
+        # 201: End Turn or DISCARD (Multiplexed)
         elif action_idx == 201:
+            for a in self.game.state.playable_actions:
+                if a[1] == ActionType.DISCARD:
+                    return Action(color, ActionType.DISCARD, a[2])
+                if a[1] == ActionType.END_TURN:
+                    return Action(color, ActionType.END_TURN, None)
             return Action(color, ActionType.END_TURN, None)
-            
-        # Fallback
-        return Action(color, ActionType.END_TURN, None)
 
     def _get_obs(self):
         state = self.game.state
@@ -286,30 +295,44 @@ class CatanEnv(gym.Env):
         # Features: 1 Empty + 4 Settlements (P0-P3) + 4 Cities (P0-P3) + 6 Port Types = 15
         vertex_obs = np.zeros((self.n_vertices, self.n_vertex_features), dtype=np.float32)
         
-        # TODO: Implement robust Node ID -> Coordinate mapping for Catanatron
-        # Current Catanatron version doesn't easily expose node list.
-        # Leaving as zeros for Phase 2 to prevent crash.
+        buildings = board.buildings
+        for node_id, (owner_color, b_type) in buildings.items():
+            if 0 <= node_id < self.n_vertices:
+                # Color index: RED=0, BLUE=1, WHITE=2, ORANGE=3
+                c_idx = {Color.RED: 0, Color.BLUE: 1, Color.WHITE: 2, Color.ORANGE: 3}.get(owner_color, 0)
+                if "SETTLEMENT" in str(b_type):
+                    vertex_obs[node_id, 1 + c_idx] = 1.0
+                elif "CITY" in str(b_type):
+                    vertex_obs[node_id, 5 + c_idx] = 1.0
         
         # --- 3. Edges (72 Links) ---
         # Features: 1 Empty + 4 Roads (P0-P3)
         edge_obs = np.zeros((self.n_edges, self.n_edge_features), dtype=np.float32)
         
-        # TODO: Implement Edge extraction
+        roads = board.roads
+        for edge_tuple, owner_color in roads.items():
+            edge_tuple_sorted = tuple(sorted(edge_tuple))
+            if edge_tuple_sorted in self.edge_to_idx:
+                e_idx = self.edge_to_idx[edge_tuple_sorted]
+                c_idx = {Color.RED: 0, Color.BLUE: 1, Color.WHITE: 2, Color.ORANGE: 3}.get(owner_color, 0)
+                edge_obs[e_idx, 1 + c_idx] = 1.0
         
         # --- 4. Globals ---
         global_obs = np.zeros((self.n_globals,), dtype=np.float32)
         
+        # Player-specific values
+        for p in range(4):
+            # Victory Points
+            global_obs[p] = state.player_state.get(f"P{p}_VICTORY_POINTS", 0)
+            
         # Self Resources
-        player_state = getattr(state, "player_state", {})
         r_map_order = ["WOOD", "BRICK", "SHEEP", "WHEAT", "ORE"]
         for idx, res_name in enumerate(r_map_order):
-            key = f"P{self.player_id}_{res_name}_IN_HAND"
-            global_obs[idx] = player_state.get(key, 0)
+            global_obs[4 + idx] = state.player_state.get(f"P{self.player_id}_{res_name}_IN_HAND", 0)
         
         # Opponent Resources (from Tracker)
         opp_res = self.resource_tracker.get_opponent_resources(state, self.player_id)
-        offset = 5
-        global_obs[offset:offset+15] = opp_res
+        global_obs[9:9+15] = opp_res
         
         return {
             "board": board_obs,
